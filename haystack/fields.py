@@ -3,6 +3,7 @@ from __future__ import absolute_import, division, print_function, unicode_litera
 
 import re
 
+from django.core.exceptions import ObjectDoesNotExist
 from django.template import Context, loader
 from django.utils import datetime_safe, six
 
@@ -26,7 +27,7 @@ class SearchField(object):
     def __init__(self, model_attr=None, use_template=False, template_name=None,
                  document=False, indexed=True, stored=True, faceted=False,
                  default=NOT_PROVIDED, null=False, index_fieldname=None,
-                 facet_class=None, boost=1.0, weight=None):
+                 facet_class=None, boost=1.0, weight=None, must_exist=True):
         # Track what the index thinks this field is called.
         self.instance_name = None
         self.model_attr = model_attr
@@ -41,6 +42,7 @@ class SearchField(object):
         self.index_fieldname = index_fieldname
         self.boost = weight or boost
         self.is_multivalued = False
+        self.must_exist = must_exist
 
         # We supply the facet_class for making it easy to create a faceted
         # field based off of this field.
@@ -83,10 +85,16 @@ class SearchField(object):
             current_object = obj
 
             for attr in attrs:
-                if not hasattr(current_object, attr):
+                if self.must_exist and not hasattr(current_object, attr):
                     raise SearchFieldError("The model '%s' does not have a model_attr '%s'." % (repr(current_object), attr))
 
-                current_object = getattr(current_object, attr, None)
+                if self.must_exist:
+                    current_object = getattr(current_object, attr, None)
+                else:
+                    try:
+                        current_object = getattr(current_object, attr, None)
+                    except ObjectDoesNotExist:
+                        current_object = None
 
                 if current_object is None:
                     if self.has_default():
@@ -99,8 +107,11 @@ class SearchField(object):
                         # Fall out of the loop, given any further attempts at
                         # accesses will fail miserably.
                         break
-                    else:
+                    elif self.must_exist:
                         raise SearchFieldError("The model '%s' combined with model_attr '%s' returned None, but doesn't allow a default or null value." % (repr(obj), self.model_attr))
+                    else:
+                        # Does not exist
+                        break
 
             if callable(current_object):
                 return current_object()
